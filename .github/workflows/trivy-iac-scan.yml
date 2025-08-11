@@ -1,0 +1,66 @@
+name: Trivy IaC Security Scan
+
+on:
+  push:
+    branches: [ "main", "develop" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  trivy-iac-scan:
+    name: Trivy IaC Security Scan
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Run Trivy IaC scan
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'config'
+        scan-ref: 'example_app'
+        format: 'sarif'
+        output: 'trivy-iac-results.sarif'
+        severity: 'CRITICAL,HIGH,MEDIUM'
+        exit-code: '1'
+
+    - name: Upload Trivy scan results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: 'trivy-iac-results.sarif'
+
+    - name: Run Trivy IaC scan (table format)
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'config'
+        scan-ref: 'example_app'
+        format: 'table'
+        severity: 'CRITICAL,HIGH,MEDIUM'
+        output: 'trivy-iac-results.txt'
+
+    - name: Display scan results
+      if: always()
+      run: |
+        echo "=== Trivy IaC Scan Results ==="
+        if [ -f trivy-iac-results.txt ]; then
+          cat trivy-iac-results.txt
+        else
+          echo "No IaC security issues found!"
+        fi
+
+    - name: Archive scan results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: trivy-iac-scan-results
+        path: |
+          trivy-iac-results.sarif
+          trivy-iac-results.txt
+        retention-days: 30
