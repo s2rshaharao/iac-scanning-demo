@@ -38,7 +38,7 @@ jobs:
         sarif_file: 'trivy-iac-results.sarif'
         category: 'trivy-iac-scan'
 
-    - name: Check for dismissed alerts and reopen if issues persist
+    - name: Close alerts for fixed issues
       uses: actions/github-script@v7
       continue-on-error: true
       if: always()
@@ -47,25 +47,90 @@ jobs:
           try {
             const fs = require('fs');
             
-            // Wait a moment for SARIF upload to process
+            // Wait for SARIF upload to process
             await new Promise(resolve => setTimeout(resolve, 15000));
             
-            // Get ALL alerts (any state) for debugging
-            const allAlerts = await github.rest.codeScanning.listAlertsForRepo({
+            // Read current scan results to see what issues were found
+            let currentIssues = [];
+            if (fs.existsSync('trivy-iac-results.txt')) {
+              const scanContent = fs.readFileSync('trivy-iac-results.txt', 'utf8');
+              console.log('Current scan results:', scanContent.substring(0, 500) + '...');
+              
+              // Extract issue types from scan results (this is a simple approach)
+              const hasLoggingIssue = scanContent.includes('Control plane controller manager logging is not enabled') || 
+                                     scanContent.includes('AVD-AWS-0038');
+              const hasPublicAccessIssue = scanContent.includes('Public cluster access is enabled') || 
+                                          scanContent.includes('AVD-AWS-0040');
+              const hasSecurityGroupIssue = scanContent.includes('Security group rule allows ingress from 0.0.0.0/0') ||
+                                           scanContent.includes('egress');
+              
+              console.log(`Current scan issues detected:`);
+              console.log(`  - Logging issue: ${hasLoggingIssue}`);
+              console.log(`  - Public access issue: ${hasPublicAccessIssue}`);
+              console.log(`  - Security group issue: ${hasSecurityGroupIssue}`);
+            }
+            
+            // Get all current open alerts
+            const openAlerts = await github.rest.codeScanning.listAlertsForRepo({
               owner: context.repo.owner,
-              repo: context.repo.repo
+              repo: context.repo.repo,
+              state: 'open'
             });
             
-            console.log(`🔍 DEBUG: Total alerts in repo: ${allAlerts.data.length}`);
+            console.log(`Found ${openAlerts.data.length} open alerts to evaluate`);
             
-            // Group by state for debugging
-            const alertsByState = allAlerts.data.reduce((acc, alert) => {
-              acc[alert.state] = (acc[alert.state] || 0) + 1;
-              return acc;
-            }, {});
+            let closedCount = 0;
+            let keptOpenCount = 0;
             
-            console.log(`📊 Alerts by state:`, JSON.stringify(alertsByState, null, 2));
+            for (const alert of openAlerts.data) {
+              const ruleId = alert.rule?.id;
+              const alertDescription = alert.rule?.description || alert.most_recent_instance?.message?.text || '';
+              
+              console.log(`Evaluating alert #${alert.number}: ${ruleId} - ${alertDescription.substring(0, 100)}...`);
+              
+              // Simple logic: if scan shows no issues at all, close the alert
+              // More sophisticated logic could match specific rule types
+              const scanHasAnyIssues = fs.existsSync('trivy-iac-results.txt') && 
+                                      fs.readFileSync('trivy-iac-results.txt', 'utf8').includes('CRITICAL') ||
+                                      fs.readFileSync('trivy-iac-results.txt', 'utf8').includes('HIGH') ||
+                                      fs.readFileSync('trivy-iac-results.txt', 'utf8').includes('MEDIUM');
+              
+              if (!scanHasAnyIssues) {
+                // No issues in current scan, close this alert
+                try {
+                  await github.rest.codeScanning.updateAlert({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    alert_number: alert.number,
+                    state: 'dismissed',
+                    dismissed_reason: 'false_positive',
+                    dismissed_comment: 'Issue appears to be fixed - not found in current scan'
+                  });
+                  console.log(`✅ Closed alert #${alert.number} (issue appears fixed)`);
+                  closedCount++;
+                } catch (error) {
+                  console.log(`❌ Failed to close alert #${alert.number}: ${error.message}`);
+                }
+              } else {
+                console.log(`✓ Keeping alert #${alert.number} open (issues still exist in scan)`);
+                keptOpenCount++;
+              }
+            }
             
+            console.log(`\n📊 Alert cleanup summary:`);
+            console.log(`   Alerts closed (fixed): ${closedCount}`);
+            console.log(`   Alerts kept open (persistent): ${keptOpenCount}`);
+            
+          } catch (error) {
+            console.log('❌ Error in alert cleanup logic:', error.message);
+          }
+
+    - name: Reopen all dismissed alerts for fresh evaluation
+      uses: actions/github-script@v7
+      continue-on-error: true
+      with:
+        script: |
+          try {
             // Get all dismissed alerts
             const dismissedAlerts = await github.rest.codeScanning.listAlertsForRepo({
               owner: context.repo.owner,
@@ -73,66 +138,29 @@ jobs:
               state: 'dismissed'
             });
             
-            console.log(`Found ${dismissedAlerts.data.length} dismissed alerts to check`);
-            
-            if (dismissedAlerts.data.length === 0) {
-              console.log('No dismissed alerts to check');
-              return;
-            }
-            
-            // Get all current open alerts (includes newly created ones)
-            const openAlerts = await github.rest.codeScanning.listAlertsForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'open'
-            });
-            
-            console.log(`Found ${openAlerts.data.length} open alerts after scan`);
+            console.log(`Found ${dismissedAlerts.data.length} dismissed alerts to reopen`);
             
             let reopenedCount = 0;
-            
-            // For each dismissed alert, check if similar issue exists in open alerts
-            for (const dismissedAlert of dismissedAlerts.data) {
-              const ruleId = dismissedAlert.rule?.id;
-              const filePath = dismissedAlert.most_recent_instance?.location?.path;
-              
-              if (!ruleId) continue;
-              
-              // Check if there's an open alert with the same rule in the same or similar location
-              const similarOpenAlert = openAlerts.data.find(openAlert => 
-                openAlert.rule?.id === ruleId &&
-                openAlert.most_recent_instance?.location?.path === filePath
-              );
-              
-              // Only reopen if we have a similar open alert (meaning the specific issue still exists)
-              if (similarOpenAlert) {
-                try {
-                  await github.rest.codeScanning.updateAlert({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    alert_number: dismissedAlert.number,
-                    state: 'open',
-                    dismissed_comment: 'Reopened because the same security issue was found in latest scan'
-                  });
-                  
-                  console.log(`✅ Reopened dismissed alert #${dismissedAlert.number}: ${ruleId} in ${filePath} (found matching issue)`);
-                  reopenedCount++;
-                } catch (error) {
-                  console.log(`❌ Failed to reopen alert #${dismissedAlert.number}: ${error.message}`);
-                }
-              } else {
-                console.log(`✓ Dismissed alert #${dismissedAlert.number} (${ruleId}) appears to be resolved - not reopening`);
+            for (const alert of dismissedAlerts.data) {
+              try {
+                await github.rest.codeScanning.updateAlert({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  alert_number: alert.number,
+                  state: 'open',
+                  dismissed_comment: 'Reopened for fresh evaluation against current scan'
+                });
+                console.log(`✅ Reopened alert #${alert.number}: ${alert.rule?.id || 'Unknown rule'}`);
+                reopenedCount++;
+              } catch (error) {
+                console.log(`❌ Failed to reopen alert #${alert.number}: ${error.message}`);
               }
             }
             
-            console.log(`\n📊 Alert reopening summary:`);
-            console.log(`   Total dismissed alerts checked: ${dismissedAlerts.data.length}`);
-            console.log(`   Alerts reopened: ${reopenedCount}`);
-            console.log(`   Alerts left dismissed (likely fixed): ${dismissedAlerts.data.length - reopenedCount}`);
+            console.log(`Successfully reopened ${reopenedCount} out of ${dismissedAlerts.data.length} dismissed alerts`);
             
           } catch (error) {
-            console.log('❌ Error in alert reopening logic:', error.message);
-            console.log('Stack trace:', error.stack);
+            console.log('Error reopening dismissed alerts:', error.message);
           }
 
     - name: Run Trivy IaC scan (table format)
