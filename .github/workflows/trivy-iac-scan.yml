@@ -38,6 +38,25 @@ jobs:
         sarif_file: 'trivy-iac-results.sarif'
         category: 'trivy-iac-scan'
 
+    - name: Run Trivy IaC scan (table format)
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'config'
+        scan-ref: 'example_app/learn-terraform-provision-eks-cluster'
+        format: 'table'
+        severity: 'CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN'
+        output: 'trivy-iac-results.txt'
+
+    - name: Display scan results
+      if: always()
+      run: |
+        echo "=== Trivy IaC Scan Results ==="
+        if [ -f trivy-iac-results.txt ]; then
+          cat trivy-iac-results.txt
+        else
+          echo "No IaC security issues found!"
+        fi
+
     - name: Close alerts for fixed issues
       uses: actions/github-script@v7
       continue-on-error: true
@@ -48,26 +67,23 @@ jobs:
             const fs = require('fs');
             
             // Wait for SARIF upload to process
-            await new Promise(resolve => setTimeout(resolve, 15000));
+            await new Promise(resolve => setTimeout(resolve, 10000));
             
             // Read current scan results to see what issues were found
-            let currentIssues = [];
+            let scanHasAnyIssues = false;
             if (fs.existsSync('trivy-iac-results.txt')) {
               const scanContent = fs.readFileSync('trivy-iac-results.txt', 'utf8');
-              console.log('Current scan results:', scanContent.substring(0, 500) + '...');
+              console.log('Scan file found, checking for issues...');
               
-              // Extract issue types from scan results (this is a simple approach)
-              const hasLoggingIssue = scanContent.includes('Control plane controller manager logging is not enabled') || 
-                                     scanContent.includes('AVD-AWS-0038');
-              const hasPublicAccessIssue = scanContent.includes('Public cluster access is enabled') || 
-                                          scanContent.includes('AVD-AWS-0040');
-              const hasSecurityGroupIssue = scanContent.includes('Security group rule allows ingress from 0.0.0.0/0') ||
-                                           scanContent.includes('egress');
+              // Check if scan has any security issues
+              scanHasAnyIssues = scanContent.includes('CRITICAL') || 
+                                scanContent.includes('HIGH') || 
+                                scanContent.includes('MEDIUM') ||
+                                scanContent.includes('LOW');
               
-              console.log(`Current scan issues detected:`);
-              console.log(`  - Logging issue: ${hasLoggingIssue}`);
-              console.log(`  - Public access issue: ${hasPublicAccessIssue}`);
-              console.log(`  - Security group issue: ${hasSecurityGroupIssue}`);
+              console.log(`Current scan has issues: ${scanHasAnyIssues}`);
+            } else {
+              console.log('❌ Scan results file not found, assuming no issues');
             }
             
             // Get all current open alerts
@@ -86,14 +102,7 @@ jobs:
               const ruleId = alert.rule?.id;
               const alertDescription = alert.rule?.description || alert.most_recent_instance?.message?.text || '';
               
-              console.log(`Evaluating alert #${alert.number}: ${ruleId} - ${alertDescription.substring(0, 100)}...`);
-              
-              // Simple logic: if scan shows no issues at all, close the alert
-              // More sophisticated logic could match specific rule types
-              const scanHasAnyIssues = fs.existsSync('trivy-iac-results.txt') && 
-                                      fs.readFileSync('trivy-iac-results.txt', 'utf8').includes('CRITICAL') ||
-                                      fs.readFileSync('trivy-iac-results.txt', 'utf8').includes('HIGH') ||
-                                      fs.readFileSync('trivy-iac-results.txt', 'utf8').includes('MEDIUM');
+              console.log(`Evaluating alert #${alert.number}: ${ruleId}`);
               
               if (!scanHasAnyIssues) {
                 // No issues in current scan, close this alert
@@ -124,63 +133,6 @@ jobs:
           } catch (error) {
             console.log('❌ Error in alert cleanup logic:', error.message);
           }
-
-    - name: Reopen all dismissed alerts for fresh evaluation
-      uses: actions/github-script@v7
-      continue-on-error: true
-      with:
-        script: |
-          try {
-            // Get all dismissed alerts
-            const dismissedAlerts = await github.rest.codeScanning.listAlertsForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'dismissed'
-            });
-            
-            console.log(`Found ${dismissedAlerts.data.length} dismissed alerts to reopen`);
-            
-            let reopenedCount = 0;
-            for (const alert of dismissedAlerts.data) {
-              try {
-                await github.rest.codeScanning.updateAlert({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  alert_number: alert.number,
-                  state: 'open'
-                  // Note: Cannot set dismissed_comment when state is 'open'
-                });
-                console.log(`✅ Reopened alert #${alert.number}: ${alert.rule?.id || 'Unknown rule'}`);
-                reopenedCount++;
-              } catch (error) {
-                console.log(`❌ Failed to reopen alert #${alert.number}: ${error.message}`);
-              }
-            }
-            
-            console.log(`Successfully reopened ${reopenedCount} out of ${dismissedAlerts.data.length} dismissed alerts`);
-            
-          } catch (error) {
-            console.log('Error reopening dismissed alerts:', error.message);
-          }
-
-    - name: Run Trivy IaC scan (table format)
-      uses: aquasecurity/trivy-action@master
-      with:
-        scan-type: 'config'
-        scan-ref: 'example_app/learn-terraform-provision-eks-cluster'
-        format: 'table'
-        severity: 'CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN'
-        output: 'trivy-iac-results.txt'
-
-    - name: Display scan results
-      if: always()
-      run: |
-        echo "=== Trivy IaC Scan Results ==="
-        if [ -f trivy-iac-results.txt ]; then
-          cat trivy-iac-results.txt
-        else
-          echo "No IaC security issues found!"
-        fi
 
     - name: Archive scan results
       if: always()
