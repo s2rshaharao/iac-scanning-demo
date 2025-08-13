@@ -1,5 +1,6 @@
 # Trivy IaC Security Scanning Pipeline - Detailed Documentation
 
+
 ## Overview
 
 This document provides a comprehensive explanation of each step in the Trivy Infrastructure as Code (IaC) security scanning pipeline. The pipeline is implemented using GitHub Actions and follows a security-first approach to Infrastructure as Code analysis.
