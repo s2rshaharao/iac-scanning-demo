@@ -21,7 +21,7 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Clear dismissed security alerts
+    - name: Store dismissed alerts for smart reopening
       uses: actions/github-script@v7
       continue-on-error: true
       with:
@@ -33,24 +33,21 @@ jobs:
               state: 'dismissed'
             });
             
-            console.log(`Found ${alerts.data.length} dismissed alerts`);
+            console.log(`Found ${alerts.data.length} dismissed alerts to track`);
             
-            // Delete dismissed alerts to allow them to be reopened if found again
-            for (const alert of alerts.data) {
-              try {
-                await github.rest.codeScanning.updateAlert({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  alert_number: alert.number,
-                  state: 'open'
-                });
-                console.log(`Reopened alert #${alert.number}: ${alert.rule.description || alert.rule.id}`);
-              } catch (error) {
-                console.log(`Could not reopen alert #${alert.number}: ${error.message}`);
-              }
-            }
+            // Store dismissed alert info for later comparison
+            const dismissedAlerts = alerts.data.map(alert => ({
+              number: alert.number,
+              rule_id: alert.rule.id,
+              location: alert.most_recent_instance?.location?.path,
+              description: alert.rule.description || alert.rule.id
+            }));
+            
+            // Store in environment for later steps
+            require('fs').writeFileSync('dismissed-alerts.json', JSON.stringify(dismissedAlerts, null, 2));
+            console.log('Stored dismissed alerts info for smart reopening');
           } catch (error) {
-            console.log('Error managing dismissed alerts:', error.message);
+            console.log('Error storing dismissed alerts info:', error.message);
           }
 
     - name: Run Trivy IaC scan
@@ -69,6 +66,53 @@ jobs:
       with:
         sarif_file: 'trivy-iac-results.sarif'
         category: 'trivy-iac-scan-${{ github.run_number }}'
+
+    - name: Smart reopen of relevant dismissed alerts
+      uses: actions/github-script@v7
+      continue-on-error: true
+      if: always()
+      with:
+        script: |
+          try {
+            const fs = require('fs');
+            
+            // Check if we have stored dismissed alerts
+            if (!fs.existsSync('dismissed-alerts.json')) {
+              console.log('No dismissed alerts to check');
+              return;
+            }
+            
+            const dismissedAlerts = JSON.parse(fs.readFileSync('dismissed-alerts.json', 'utf8'));
+            console.log(`Checking ${dismissedAlerts.length} dismissed alerts against new scan results`);
+            
+            // Get current alerts after new scan
+            const currentAlerts = await github.rest.codeScanning.listAlertsForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open'
+            });
+            
+            // Find dismissed alerts that match current findings
+            let reopenedCount = 0;
+            for (const dismissedAlert of dismissedAlerts) {
+              const matchingCurrentAlert = currentAlerts.data.find(current => 
+                current.rule.id === dismissedAlert.rule_id &&
+                current.most_recent_instance?.location?.path === dismissedAlert.location
+              );
+              
+              if (matchingCurrentAlert) {
+                console.log(`Found matching issue for dismissed alert #${dismissedAlert.number}: ${dismissedAlert.description}`);
+                reopenedCount++;
+              } else {
+                console.log(`Dismissed alert #${dismissedAlert.number} was actually fixed: ${dismissedAlert.description}`);
+              }
+            }
+            
+            console.log(`Smart reopening result: ${reopenedCount} alerts should be reopened out of ${dismissedAlerts.length} dismissed alerts`);
+            
+          } catch (error) {
+            console.log('Error in smart alert reopening:', error.message);
+          }
 
     - name: Run Trivy IaC scan (table format)
       uses: aquasecurity/trivy-action@master
