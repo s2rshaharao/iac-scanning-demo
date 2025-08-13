@@ -109,16 +109,6 @@ jobs:
             
             console.log(`Found ${openAlerts.data.length} open alerts after scan`);
             
-            // Check if scan results file exists to validate findings
-            let scanHasIssues = false;
-            if (fs.existsSync('trivy-iac-results.txt')) {
-              const scanContent = fs.readFileSync('trivy-iac-results.txt', 'utf8');
-              scanHasIssues = scanContent.includes('CRITICAL') || scanContent.includes('HIGH') || 
-                             scanContent.includes('MEDIUM') || scanContent.includes('LOW');
-            }
-            
-            console.log(`Current scan has issues: ${scanHasIssues}`);
-            
             let reopenedCount = 0;
             
             // For each dismissed alert, check if similar issue exists in open alerts
@@ -134,24 +124,24 @@ jobs:
                 openAlert.most_recent_instance?.location?.path === filePath
               );
               
-              // If we have a similar open alert OR scan shows issues, reopen the dismissed alert
-              if (similarOpenAlert || scanHasIssues) {
+              // Only reopen if we have a similar open alert (meaning the specific issue still exists)
+              if (similarOpenAlert) {
                 try {
                   await github.rest.codeScanning.updateAlert({
                     owner: context.repo.owner,
                     repo: context.repo.repo,
                     alert_number: dismissedAlert.number,
                     state: 'open',
-                    dismissed_comment: 'Reopened because the security issue persists in latest scan'
+                    dismissed_comment: 'Reopened because the same security issue was found in latest scan'
                   });
                   
-                  console.log(`✅ Reopened dismissed alert #${dismissedAlert.number}: ${ruleId} in ${filePath}`);
+                  console.log(`✅ Reopened dismissed alert #${dismissedAlert.number}: ${ruleId} in ${filePath} (found matching issue)`);
                   reopenedCount++;
                 } catch (error) {
                   console.log(`❌ Failed to reopen alert #${dismissedAlert.number}: ${error.message}`);
                 }
               } else {
-                console.log(`✓ Dismissed alert #${dismissedAlert.number} (${ruleId}) appears to be resolved`);
+                console.log(`✓ Dismissed alert #${dismissedAlert.number} (${ruleId}) appears to be resolved - not reopening`);
               }
             }
             
