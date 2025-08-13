@@ -147,8 +147,8 @@ jobs:
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   alert_number: alert.number,
-                  state: 'open',
-                  dismissed_comment: 'Reopened for fresh evaluation against current scan'
+                  state: 'open'
+                  // Note: Cannot set dismissed_comment when state is 'open'
                 });
                 console.log(`✅ Reopened alert #${alert.number}: ${alert.rule?.id || 'Unknown rule'}`);
                 reopenedCount++;
