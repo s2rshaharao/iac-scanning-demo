@@ -25,7 +25,7 @@ jobs:
       uses: aquasecurity/trivy-action@master
       with:
         scan-type: 'config'
-        scan-ref: 'example_app'
+        scan-ref: 'example_app/learn-terraform-provision-eks-cluster'
         format: 'sarif'
         output: 'trivy-iac-results.sarif'
         severity: 'CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN'
@@ -41,7 +41,7 @@ jobs:
       uses: aquasecurity/trivy-action@master
       with:
         scan-type: 'config'
-        scan-ref: 'example_app'
+        scan-ref: 'example_app/learn-terraform-provision-eks-cluster'
         format: 'table'
         severity: 'CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN'
         output: 'trivy-iac-results.txt'
