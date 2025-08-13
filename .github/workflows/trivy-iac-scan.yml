@@ -28,7 +28,7 @@ jobs:
         scan-ref: 'example_app'
         format: 'sarif'
         output: 'trivy-iac-results.sarif'
-        severity: 'CRITICAL,HIGH,MEDIUM'
+        severity: 'CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN'
         exit-code: '0'
 
     - name: Upload Trivy scan results to GitHub Security tab
@@ -43,7 +43,7 @@ jobs:
         scan-type: 'config'
         scan-ref: 'example_app'
         format: 'table'
-        severity: 'CRITICAL,HIGH,MEDIUM'
+        severity: 'CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN'
         output: 'trivy-iac-results.txt'
 
     - name: Display scan results
