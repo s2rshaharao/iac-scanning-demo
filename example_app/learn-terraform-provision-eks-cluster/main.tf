@@ -55,7 +55,8 @@ module "eks" {
   cluster_name    = local.cluster_name
   cluster_version = "1.29"
 
-  cluster_endpoint_public_access           = true
+  cluster_endpoint_public_access  = false
+  cluster_endpoint_private_access = true
   enable_cluster_creator_admin_permissions = true
 
   # Enable cluster control plane logging for security and compliance
