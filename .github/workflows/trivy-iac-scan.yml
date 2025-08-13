@@ -48,7 +48,23 @@ jobs:
             const fs = require('fs');
             
             // Wait a moment for SARIF upload to process
-            await new Promise(resolve => setTimeout(resolve, 10000));
+            await new Promise(resolve => setTimeout(resolve, 15000));
+            
+            // Get ALL alerts (any state) for debugging
+            const allAlerts = await github.rest.codeScanning.listAlertsForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo
+            });
+            
+            console.log(`🔍 DEBUG: Total alerts in repo: ${allAlerts.data.length}`);
+            
+            // Group by state for debugging
+            const alertsByState = allAlerts.data.reduce((acc, alert) => {
+              acc[alert.state] = (acc[alert.state] || 0) + 1;
+              return acc;
+            }, {});
+            
+            console.log(`📊 Alerts by state:`, JSON.stringify(alertsByState, null, 2));
             
             // Get all dismissed alerts
             const dismissedAlerts = await github.rest.codeScanning.listAlertsForRepo({
