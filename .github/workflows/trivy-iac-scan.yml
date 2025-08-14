@@ -1,5 +1,8 @@
 name: Trivy IaC Security Scan
 
+# This workflow scans Terraform configurations for security issues
+# and uploads results to GitHub Security tab
+
 on:
   push:
     branches: [ "main", "develop" ]
