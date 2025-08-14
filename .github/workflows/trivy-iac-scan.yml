@@ -19,12 +19,13 @@ jobs:
       contents: read
       security-events: write
       actions: read
+      pull-requests: write
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Run Trivy IaC scan
+    - name: Run Trivy IaC scan (SARIF format)
       uses: aquasecurity/trivy-action@master
       with:
         scan-type: 'config'
@@ -34,14 +35,7 @@ jobs:
         severity: 'CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN'
         exit-code: '0'
 
-    - name: Upload Trivy scan results to GitHub Security tab
-      uses: github/codeql-action/upload-sarif@v3
-      if: always()
-      with:
-        sarif_file: 'trivy-iac-results.sarif'
-        category: 'trivy-iac-scan'
-
-    - name: Run Trivy IaC scan (table format)
+    - name: Run Trivy IaC scan (table format for PR comment)
       uses: aquasecurity/trivy-action@master
       with:
         scan-type: 'config'
@@ -49,12 +43,102 @@ jobs:
         format: 'table'
         severity: 'CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN'
         output: 'trivy-iac-results.txt'
+        exit-code: '0'
+
+    - name: Upload Trivy scan results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: 'trivy-iac-results.sarif'
+        category: 'trivy-iac-scan'
+
+    - name: Parse scan results for PR comment
+      if: github.event_name == 'pull_request'
+      run: |
+        echo "TRIVY_RESULTS<<EOF" >> $GITHUB_ENV
+        if [ -f trivy-iac-results.txt ] && [ -s trivy-iac-results.txt ]; then
+          # Count issues by severity
+          CRITICAL=$(grep -c "CRITICAL" trivy-iac-results.txt || echo "0")
+          HIGH=$(grep -c "HIGH" trivy-iac-results.txt || echo "0")
+          MEDIUM=$(grep -c "MEDIUM" trivy-iac-results.txt || echo "0")
+          LOW=$(grep -c "LOW" trivy-iac-results.txt || echo "0")
+          
+          echo "## 🔒 Trivy IaC Security Scan Results"
+          echo ""
+          echo "**Scan Target:** \`example_app/terraform-aws-eks\`"
+          echo ""
+          echo "### 📊 Issue Summary"
+          echo "| Severity | Count |"
+          echo "|----------|-------|"
+          echo "| 🔴 Critical | $CRITICAL |"
+          echo "| 🟠 High | $HIGH |"
+          echo "| 🟡 Medium | $MEDIUM |"
+          echo "| 🔵 Low | $LOW |"
+          echo ""
+          
+          if [ $CRITICAL -gt 0 ] || [ $HIGH -gt 0 ]; then
+            echo "⚠️ **Action Required:** Critical or High severity issues found!"
+            echo ""
+          fi
+          
+          echo "### 📋 Detailed Results"
+          echo "\`\`\`"
+          cat trivy-iac-results.txt
+          echo "\`\`\`"
+          echo ""
+          echo "---"
+          echo "📋 **Full results available in [Security tab](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/security/code-scanning)**"
+        else
+          echo "## ✅ Trivy IaC Security Scan Results"
+          echo ""
+          echo "**Scan Target:** \`example_app/terraform-aws-eks\`"
+          echo ""
+          echo "🎉 **No security issues found!** Your infrastructure configuration looks secure."
+          echo ""
+          echo "---"
+          echo "📋 **Scan details available in [Security tab](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/security/code-scanning)**"
+        fi
+        EOF
+
+    - name: Comment PR with scan results
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const { owner, repo } = context.repo;
+          const issue_number = context.issue.number;
+          
+          // Delete previous Trivy comments to avoid spam
+          const comments = await github.rest.issues.listComments({
+            owner,
+            repo,
+            issue_number,
+          });
+          
+          for (const comment of comments.data) {
+            if (comment.body.includes('🔒 Trivy IaC Security Scan Results') || 
+                comment.body.includes('✅ Trivy IaC Security Scan Results')) {
+              await github.rest.issues.deleteComment({
+                owner,
+                repo,
+                comment_id: comment.id,
+              });
+            }
+          }
+          
+          // Post new comment
+          await github.rest.issues.createComment({
+            owner,
+            repo,
+            issue_number,
+            body: process.env.TRIVY_RESULTS
+          });
 
     - name: Display scan results
       if: always()
       run: |
         echo "=== Trivy IaC Scan Results ==="
-        if [ -f trivy-iac-results.txt ]; then
+        if [ -f trivy-iac-results.txt ] && [ -s trivy-iac-results.txt ]; then
           cat trivy-iac-results.txt
         else
           echo "No IaC security issues found!"
