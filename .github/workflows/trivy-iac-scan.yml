@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [ "main" ]
 
+env:
+  # 📁 Target directory for security scanning - change this to scan different example apps
+  SCAN_TARGET: example_app/terraform-aws-lambda-example
+
 jobs:
   security-scan:
     name: Security Scan
@@ -29,8 +33,8 @@ jobs:
 
     - name: Run secrets scan
       run: |
-        trufflehog filesystem example_app/learn-terraform-provision-eks-cluster --json > secrets-results.json || echo "[]" > secrets-results.json
-        trufflehog filesystem example_app/learn-terraform-provision-eks-cluster --format=sarif > secrets-results.sarif || echo '{"version":"2.1.0","$schema":"https://schemastore.azurewebsites.net/schemas/json/sarif-2.1.0.json","runs":[{"tool":{"driver":{"name":"TruffleHog"}},"results":[]}]}' > secrets-results.sarif
+        trufflehog filesystem ${{ env.SCAN_TARGET }} --json > secrets-results.json || echo "[]" > secrets-results.json
+        trufflehog filesystem ${{ env.SCAN_TARGET }} --format=sarif > secrets-results.sarif || echo '{"version":"2.1.0","$schema":"https://schemastore.azurewebsites.net/schemas/json/sarif-2.1.0.json","runs":[{"tool":{"driver":{"name":"TruffleHog"}},"results":[]}]}' > secrets-results.sarif
 
     - name: Upload secrets results to Security tab
       uses: github/codeql-action/upload-sarif@v3
@@ -44,7 +48,7 @@ jobs:
       uses: aquasecurity/trivy-action@master
       with:
         scan-type: 'config'
-        scan-ref: 'example_app/learn-terraform-provision-eks-cluster'
+        scan-ref: ${{ env.SCAN_TARGET }}
         format: 'sarif'
         output: 'iac-results.sarif'
         severity: 'CRITICAL,HIGH,MEDIUM,LOW'
@@ -53,7 +57,7 @@ jobs:
       uses: aquasecurity/trivy-action@master
       with:
         scan-type: 'config'
-        scan-ref: 'example_app/learn-terraform-provision-eks-cluster'
+        scan-ref: ${{ env.SCAN_TARGET }}
         format: 'table'
         output: 'iac-results.txt'
         severity: 'CRITICAL,HIGH,MEDIUM,LOW'
@@ -70,7 +74,7 @@ jobs:
       uses: aquasecurity/trivy-action@master
       with:
         scan-type: 'fs'
-        scan-ref: 'example_app/learn-terraform-provision-eks-cluster'
+        scan-ref: ${{ env.SCAN_TARGET }}
         format: 'sarif'
         output: 'dependency-results.sarif'
         severity: 'CRITICAL,HIGH,MEDIUM,LOW'
@@ -79,7 +83,7 @@ jobs:
       uses: aquasecurity/trivy-action@master
       with:
         scan-type: 'fs'
-        scan-ref: 'example_app/learn-terraform-provision-eks-cluster'
+        scan-ref: ${{ env.SCAN_TARGET }}
         format: 'table'
         output: 'dependency-results.txt'
         severity: 'CRITICAL,HIGH,MEDIUM,LOW'
