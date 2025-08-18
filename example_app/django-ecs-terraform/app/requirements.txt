@@ -1,6 +1,5 @@
 # Python dependencies for Django application
-# Updated to test improved vulnerability counting
-# Final validation test of both IaC and dependency counting
+# Final validation test - new PR to verify both counting methods work
 Django==4.2.7
 gunicorn==21.2.0
 psycopg2-binary==2.9.9
