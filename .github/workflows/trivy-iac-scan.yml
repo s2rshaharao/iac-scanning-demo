@@ -99,7 +99,8 @@ jobs:
     - name: Create PR comment
       if: github.event_name == 'pull_request'
       run: |
-        SECRETS_COUNT=$(cat secrets-results.json | jq -r 'length // 0')
+        # Fix: Parse secrets count properly and remove any newlines/duplicates
+        SECRETS_COUNT=$(cat secrets-results.json | jq -r 'length // 0' | tr -d '\n' | head -1)
         
         # Extract IaC Report Summary table directly from Trivy output
         IAC_REPORT_SUMMARY=""
