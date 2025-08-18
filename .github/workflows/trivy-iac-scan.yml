@@ -65,22 +65,62 @@ jobs:
         sarif_file: iac-results.sarif
         category: iac-scan
 
-    # Step 3: Create PR Comment
+    # Step 3: Dependency Security Scan
+    - name: Run Trivy dependency scan
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: 'example_app/django-ecs-terraform'
+        format: 'sarif'
+        output: 'dependency-results.sarif'
+        severity: 'CRITICAL,HIGH,MEDIUM,LOW'
+
+    - name: Run Trivy dependency scan for PR comment
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: 'example_app/django-ecs-terraform'
+        format: 'table'
+        output: 'dependency-results.txt'
+        severity: 'CRITICAL,HIGH,MEDIUM,LOW'
+
+    - name: Upload dependency results to Security tab
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: dependency-results.sarif
+        category: dependency-scan
+
+    # Step 4: Create PR Comment
     - name: Create PR comment
       if: github.event_name == 'pull_request'
       run: |
         SECRETS_COUNT=$(cat secrets-results.json | jq -r 'length // 0')
         
-        CRITICAL=0
-        HIGH=0
-        MEDIUM=0
-        LOW=0
+        # Count IaC issues
+        IAC_CRITICAL=0
+        IAC_HIGH=0
+        IAC_MEDIUM=0
+        IAC_LOW=0
         
         if [ -f iac-results.txt ] && [ -s iac-results.txt ]; then
-          CRITICAL=$(grep -c "CRITICAL" iac-results.txt || echo "0")
-          HIGH=$(grep -c "HIGH" iac-results.txt || echo "0")
-          MEDIUM=$(grep -c "MEDIUM" iac-results.txt || echo "0")
-          LOW=$(grep -c "LOW" iac-results.txt || echo "0")
+          IAC_CRITICAL=$(grep -c "CRITICAL" iac-results.txt || echo "0")
+          IAC_HIGH=$(grep -c "HIGH" iac-results.txt || echo "0")
+          IAC_MEDIUM=$(grep -c "MEDIUM" iac-results.txt || echo "0")
+          IAC_LOW=$(grep -c "LOW" iac-results.txt || echo "0")
+        fi
+        
+        # Count dependency issues
+        DEP_CRITICAL=0
+        DEP_HIGH=0
+        DEP_MEDIUM=0
+        DEP_LOW=0
+        
+        if [ -f dependency-results.txt ] && [ -s dependency-results.txt ]; then
+          DEP_CRITICAL=$(grep -c "CRITICAL" dependency-results.txt || echo "0")
+          DEP_HIGH=$(grep -c "HIGH" dependency-results.txt || echo "0")
+          DEP_MEDIUM=$(grep -c "MEDIUM" dependency-results.txt || echo "0")
+          DEP_LOW=$(grep -c "LOW" dependency-results.txt || echo "0")
         fi
         
         cat > pr_comment.md << EOF
@@ -101,16 +141,32 @@ jobs:
         ### 🔒 IaC Security Issues
         | Severity | Count |
         |----------|-------|
-        | Critical | $CRITICAL |
-        | High | $HIGH |
-        | Medium | $MEDIUM |
-        | Low | $LOW |
+        | Critical | $IAC_CRITICAL |
+        | High | $IAC_HIGH |
+        | Medium | $IAC_MEDIUM |
+        | Low | $IAC_LOW |
+        
+        ### 📦 Dependency Vulnerabilities
+        | Severity | Count |
+        |----------|-------|
+        | Critical | $DEP_CRITICAL |
+        | High | $DEP_HIGH |
+        | Medium | $DEP_MEDIUM |
+        | Low | $DEP_LOW |
         
         <details>
-        <summary>View detailed results</summary>
+        <summary>View IaC Security Details</summary>
         
         \`\`\`
-        $(if [ -f iac-results.txt ]; then cat iac-results.txt; else echo "No issues found"; fi)
+        $(if [ -f iac-results.txt ]; then cat iac-results.txt; else echo "No IaC issues found"; fi)
+        \`\`\`
+        </details>
+        
+        <details>
+        <summary>View Dependency Details</summary>
+        
+        \`\`\`
+        $(if [ -f dependency-results.txt ]; then cat dependency-results.txt; else echo "No dependency vulnerabilities found"; fi)
         \`\`\`
         </details>
         
