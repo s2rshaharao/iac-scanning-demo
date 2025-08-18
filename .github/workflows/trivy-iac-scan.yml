@@ -100,8 +100,8 @@ jobs:
     - name: Create PR comment
       if: github.event_name == 'pull_request'
       run: |
-        # Parse secrets count properly and remove any newlines/duplicates
-        SECRETS_COUNT=$(cat secrets-results.json | jq -r 'length // 0' | tr -d '\n' | head -1)
+        # Parse secrets count
+        SECRETS_COUNT=$(cat secrets-results.json | jq -r 'length // 0' 2>/dev/null || echo "0")
         
         # Extract IaC Report Summary table directly from Trivy output
         IAC_REPORT_SUMMARY=""
@@ -127,29 +127,20 @@ jobs:
           fi
         fi
         
-        # Generate secrets summary with robust parsing
+        # Generate secrets summary
         SECRETS_DETAILS=""
         if [ "$SECRETS_COUNT" -gt 0 ]; then
           SECRETS_DETAILS="⚠️ **CRITICAL: Secrets detected!**\n\nFound in:"
-          # Try multiple TruffleHog JSON field patterns for compatibility
+          # Show secret details from JSON
           if command -v jq >/dev/null 2>&1; then
-            # Approach 1: Try modern TruffleHog v3+ structure
-            PARSED_SECRETS=$(cat secrets-results.json | jq -r '.[] | 
-              if .SourceMetadata.Data.Filesystem then
-                "- \(.DetectorName // "Unknown"): \(.SourceMetadata.Data.Filesystem.file):\(.SourceMetadata.Data.Filesystem.line // "?")"
-              elif .SourceName then
-                "- \(.DetectorName // "Unknown"): \(.SourceName) (line unknown)"
-              else
-                "- \(.DetectorName // "Unknown detector"): location unknown"
-              end' 2>/dev/null)
-            
-            if [ -n "$PARSED_SECRETS" ] && [ "$PARSED_SECRETS" != "null" ]; then
+            PARSED_SECRETS=$(cat secrets-results.json | jq -r '.[] | "- \(.DetectorName // "Unknown"): \(.SourceMetadata.Data.Filesystem.file // .SourceName // "unknown location")"' 2>/dev/null)
+            if [ -n "$PARSED_SECRETS" ]; then
               SECRETS_DETAILS="$SECRETS_DETAILS\n$PARSED_SECRETS"
             else
-              SECRETS_DETAILS="$SECRETS_DETAILS\n- Found $SECRETS_COUNT secrets (check Security tab for details)"
+              SECRETS_DETAILS="$SECRETS_DETAILS\n- Found $SECRETS_COUNT secrets"
             fi
           else
-            SECRETS_DETAILS="$SECRETS_DETAILS\n- Found $SECRETS_COUNT secrets (check Security tab for details)"
+            SECRETS_DETAILS="$SECRETS_DETAILS\n- Found $SECRETS_COUNT secrets"
           fi
         else
           SECRETS_DETAILS="✅ No secrets detected"
