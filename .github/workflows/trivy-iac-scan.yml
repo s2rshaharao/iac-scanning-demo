@@ -32,29 +32,31 @@ jobs:
     # ============================================================
     # SECRETS DETECTION PHASE
     # ============================================================
-    - name: Run TruffleHog secrets scan
-      uses: trufflesecurity/trufflehog@main
-      with:
-        path: ./
-        base: main
-        head: HEAD
-        extra_args: --debug --only-verified
-
-    - name: Run TruffleHog with SARIF output
+    - name: Install TruffleHog
       run: |
-        # Install TruffleHog if not available
-        if ! command -v trufflehog &> /dev/null; then
-          curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b /usr/local/bin
+        echo "Installing TruffleHog..."
+        curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b /usr/local/bin
+        trufflehog --version
+
+    - name: Run TruffleHog secrets scan
+      run: |
+        echo "Running TruffleHog secrets detection..."
+        
+        # Run TruffleHog and generate different output formats
+        # Scan the entire repository for secrets
+        trufflehog filesystem . --json > trufflehog-results.json || true
+        
+        # Count secrets found
+        SECRETS_COUNT=$(cat trufflehog-results.json | jq -s length)
+        echo "Secrets found: $SECRETS_COUNT"
+        
+        # Generate SARIF output for GitHub Security tab (if secrets found)
+        if [ "$SECRETS_COUNT" -gt 0 ]; then
+          trufflehog filesystem . --format=sarif > trufflehog-results.sarif || true
+        else
+          echo "No secrets found, creating empty SARIF"
+          echo '{"version":"2.1.0","$schema":"https://schemastore.azurewebsites.net/schemas/json/sarif-2.1.0.json","runs":[{"tool":{"driver":{"name":"TruffleHog"}},"results":[]}]}' > trufflehog-results.sarif
         fi
-        
-        # Run TruffleHog and generate SARIF output
-        trufflehog git file://. --format=sarif --output=trufflehog-results.sarif || true
-        
-        # Also generate JSON for easier parsing
-        trufflehog git file://. --format=json --output=trufflehog-results.json || true
-        
-        # Generate human-readable format for PR comments
-        trufflehog git file://. --format=sarif --output=trufflehog-summary.txt || true
 
     - name: Upload TruffleHog results to GitHub Security tab
       uses: github/codeql-action/upload-sarif@v3
@@ -66,12 +68,11 @@ jobs:
     # ============================================================
     # IAC SECURITY ANALYSIS PHASE  
     # ============================================================
-
     - name: Run Trivy IaC scan (SARIF format)
       uses: aquasecurity/trivy-action@master
       with:
         scan-type: 'config'
-        scan-ref: 'example_app/terraform-aws-eks'
+        scan-ref: '.'  # Scan entire repository
         format: 'sarif'
         output: 'trivy-iac-results.sarif'
         severity: 'CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN'
@@ -81,7 +82,7 @@ jobs:
       uses: aquasecurity/trivy-action@master
       with:
         scan-type: 'config'
-        scan-ref: 'example_app/terraform-aws-eks'
+        scan-ref: '.'  # Scan entire repository
         format: 'table'
         severity: 'CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN'
         output: 'trivy-iac-results.txt'
@@ -94,174 +95,80 @@ jobs:
         sarif_file: 'trivy-iac-results.sarif'
         category: 'trivy-iac-scan'
 
+    # ============================================================
+    # CREATE PR COMMENT WITH RESULTS
+    # ============================================================
     - name: Parse scan results for PR comment
       if: github.event_name == 'pull_request'
       run: |
-        # ============================================================
-        # PARSE SECRETS DETECTION RESULTS
-        # ============================================================
+        # Count secrets found
         SECRETS_FOUND=0
-        SECRETS_SUMMARY=""
-        
-        if [ -f trufflehog-results.json ] && [ -s trufflehog-results.json ]; then
-          # Count total secrets found
-          SECRETS_FOUND=$(jq length trufflehog-results.json 2>/dev/null || echo "0")
-          
-          if [ "$SECRETS_FOUND" -gt 0 ]; then
-            # Get summary of secret types (without showing actual values)
-            SECRETS_SUMMARY=$(jq -r '.[] | "- \(.DetectorName): \(.SourceMetadata.Data.Filesystem.file):\(.SourceMetadata.Data.Filesystem.line)"' trufflehog-results.json 2>/dev/null | head -10 || echo "- Secrets detected (details in Security tab)")
-          fi
+        if [ -f trufflehog-results.json ]; then
+          SECRETS_FOUND=$(cat trufflehog-results.json | jq -s length)
         fi
         
-        # ============================================================
-        # PARSE TRIVY IAC RESULTS
-        # ============================================================
+        # Count IaC issues by severity
+        CRITICAL=0
+        HIGH=0
+        MEDIUM=0
+        LOW=0
+        
         if [ -f trivy-iac-results.txt ] && [ -s trivy-iac-results.txt ]; then
-          # Count issues by severity (handle case where grep finds nothing)
-          CRITICAL=$(grep -c "CRITICAL" trivy-iac-results.txt || true)
-          HIGH=$(grep -c "HIGH" trivy-iac-results.txt || true)
-          MEDIUM=$(grep -c "MEDIUM" trivy-iac-results.txt || true)
-          LOW=$(grep -c "LOW" trivy-iac-results.txt || true)
-          
-          # Ensure counts are numeric
-          CRITICAL=${CRITICAL:-0}
-          HIGH=${HIGH:-0}
-          MEDIUM=${MEDIUM:-0}
-          LOW=${LOW:-0}
-        else
-          CRITICAL=0
-          HIGH=0
-          MEDIUM=0
-          LOW=0
+          CRITICAL=$(grep -c "CRITICAL" trivy-iac-results.txt || echo "0")
+          HIGH=$(grep -c "HIGH" trivy-iac-results.txt || echo "0")
+          MEDIUM=$(grep -c "MEDIUM" trivy-iac-results.txt || echo "0")
+          LOW=$(grep -c "LOW" trivy-iac-results.txt || echo "0")
         fi
         
-        # ============================================================
-        # CREATE COMBINED SECURITY REPORT
-        # ============================================================
-        cat > pr_comment.md << 'COMMENT_EOF'
-        ## �️ Infrastructure Security Scan Results
+        # Create PR comment
+        cat > pr_comment.md << EOF
+        ## 🛡️ Infrastructure Security Scan Results
 
-        **Scan Target:** `example_app/terraform-aws-eks`
-
-        ### � Secrets Detection
+        ### 🔐 Secrets Detection
         | Status | Count |
         |--------|-------|
-        | 🔴 Secrets Found | SECRETS_COUNT |
+        | 🔴 Secrets Found | $SECRETS_FOUND |
 
-        SECRETS_DETAILS
+        $(if [ "$SECRETS_FOUND" -gt 0 ]; then
+          echo "⚠️ **CRITICAL: Secrets detected in your code!**"
+          echo ""
+          echo "**Action Required:**"
+          echo "1. 🚨 **Remove secrets immediately**"
+          echo "2. 🔄 **Rotate compromised credentials**"
+          echo "3. 🔧 **Use environment variables or secret management**"
+          echo ""
+          echo "**Found in files:**"
+          cat trufflehog-results.json | jq -r '.[] | "- \(.SourceMetadata.Data.Filesystem.file):\(.SourceMetadata.Data.Filesystem.line)"' | head -10
+        else
+          echo "✅ **No secrets detected**"
+        fi)
 
         ### 🔒 IaC Security Analysis
         | Severity | Count |
         |----------|-------|
-        | 🔴 Critical | CRITICAL_COUNT |
-        | 🟠 High | HIGH_COUNT |
-        | 🟡 Medium | MEDIUM_COUNT |
-        | 🔵 Low | LOW_COUNT |
+        | 🔴 Critical | $CRITICAL |
+        | 🟠 High | $HIGH |
+        | 🟡 Medium | $MEDIUM |
+        | 🔵 Low | $LOW |
 
-        CRITICAL_WARNING
+        $(if [ "$CRITICAL" -gt 0 ] || [ "$HIGH" -gt 0 ] || [ "$SECRETS_FOUND" -gt 0 ]; then
+          echo "⚠️ **Action Required: Critical security issues found!**"
+        else
+          echo "✅ **All security checks passed!**"
+        fi)
 
         ### 📋 Detailed IaC Results
         <details>
         <summary>Click to expand Trivy scan results</summary>
 
-        ```
-        SCAN_RESULTS_PLACEHOLDER
-        ```
+        \`\`\`
+        $(if [ -f trivy-iac-results.txt ]; then head -100 trivy-iac-results.txt; else echo "No IaC security issues found!"; fi)
+        \`\`\`
         </details>
 
         ---
-        📋 **Full results available in [Security tab](SECURITY_TAB_URL)**
-        COMMENT_EOF
-        
-        # Replace placeholders with actual values
-        sed -i "s/SECRETS_COUNT/$SECRETS_FOUND/g" pr_comment.md
-        sed -i "s/CRITICAL_COUNT/$CRITICAL/g" pr_comment.md
-        sed -i "s/HIGH_COUNT/$HIGH/g" pr_comment.md
-        sed -i "s/MEDIUM_COUNT/$MEDIUM/g" pr_comment.md
-        sed -i "s/LOW_COUNT/$LOW/g" pr_comment.md
-        sed -i "s|SECURITY_TAB_URL|${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/security/code-scanning|g" pr_comment.md
-        
-        # Add secrets details if found
-        if [ "$SECRETS_FOUND" -gt 0 ]; then
-          cat > secrets_detail.md << 'SECRETS_EOF'
-        ⚠️ **CRITICAL: Secrets detected in your code!**
-
-        **Found secrets:**
-        SECRETS_LIST
-
-        **Action Required:**
-        1. 🚨 **Remove secrets immediately**
-        2. 🔄 **Rotate compromised credentials** 
-        3. 🔧 **Use environment variables or secret management**
-        4. 📚 **See:** [Secrets Management Guide](https://docs.github.com/en/actions/security-guides/encrypted-secrets)
-
-        SECRETS_EOF
-          
-          # Replace secrets list (safely, without showing actual values)
-          echo "$SECRETS_SUMMARY" > secrets_list.txt
-          python3 << 'PYTHON_SECRETS_EOF'
-        import re
-
-        with open('secrets_detail.md', 'r') as f:
-            content = f.read()
-
-        with open('secrets_list.txt', 'r') as f:
-            secrets_list = f.read()
-
-        content = content.replace('SECRETS_LIST', secrets_list)
-
-        with open('secrets_detail.md', 'w') as f:
-            f.write(content)
-        PYTHON_SECRETS_EOF
-          
-          # Insert secrets details into main comment
-          python3 << 'PYTHON_MAIN_EOF'
-        with open('pr_comment.md', 'r') as f:
-            content = f.read()
-
-        with open('secrets_detail.md', 'r') as f:
-            secrets_content = f.read()
-
-        content = content.replace('SECRETS_DETAILS', secrets_content)
-
-        with open('pr_comment.md', 'w') as f:
-            f.write(content)
-        PYTHON_MAIN_EOF
-        else
-          sed -i "s/SECRETS_DETAILS/✅ **No secrets detected**/" pr_comment.md
-        fi
-        
-        # Add warning if critical or high issues found (including secrets)
-        if [ "$CRITICAL" -gt 0 ] || [ "$HIGH" -gt 0 ] || [ "$SECRETS_FOUND" -gt 0 ]; then
-          sed -i "s/CRITICAL_WARNING/⚠️ **Action Required:** Critical security issues found!/" pr_comment.md
-        else
-          sed -i "s/CRITICAL_WARNING/✅ **All security checks passed!**/" pr_comment.md
-        fi
-        
-        # Replace IaC scan results (limit to first 100 lines to avoid size issues)
-        if [ -f trivy-iac-results.txt ] && [ -s trivy-iac-results.txt ]; then
-          head -100 trivy-iac-results.txt > scan_results_snippet.txt
-        else
-          echo "No IaC security issues found!" > scan_results_snippet.txt
-        fi
-        
-        python3 << 'PYTHON_EOF'
-        import re
-        
-        # Read the files
-        with open('pr_comment.md', 'r') as f:
-            content = f.read()
-        
-        with open('scan_results_snippet.txt', 'r') as f:
-            scan_results = f.read()
-        
-        # Replace the placeholder
-        content = content.replace('SCAN_RESULTS_PLACEHOLDER', scan_results)
-        
-        # Write back
-        with open('pr_comment.md', 'w') as f:
-            f.write(content)
-        PYTHON_EOF
+        📋 **Full results available in [Security tab](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/security/code-scanning)**
+        EOF
 
     - name: Comment PR with scan results
       if: github.event_name == 'pull_request'
@@ -275,7 +182,7 @@ jobs:
           // Read the comment content from file
           const commentBody = fs.readFileSync('pr_comment.md', 'utf8');
           
-          // Delete previous Trivy comments to avoid spam
+          // Delete previous security scan comments to avoid spam
           const comments = await github.rest.issues.listComments({
             owner,
             repo,
@@ -283,9 +190,7 @@ jobs:
           });
           
           for (const comment of comments.data) {
-            if (comment.body.includes('�️ Infrastructure Security Scan Results') || 
-                comment.body.includes('�🔒 Trivy IaC Security Scan Results') ||
-                comment.body.includes('✅ Trivy IaC Security Scan Results')) {
+            if (comment.body.includes('🛡️ Infrastructure Security Scan Results')) {
               await github.rest.issues.deleteComment({
                 owner,
                 repo,
@@ -302,6 +207,9 @@ jobs:
             body: commentBody
           });
 
+    # ============================================================
+    # DISPLAY RESULTS AND ARCHIVE
+    # ============================================================
     - name: Display scan results
       if: always()
       run: |
@@ -309,8 +217,8 @@ jobs:
         
         echo ""
         echo "🔐 SECRETS DETECTION RESULTS:"
-        if [ -f trufflehog-results.json ] && [ -s trufflehog-results.json ]; then
-          SECRETS_COUNT=$(jq length trufflehog-results.json 2>/dev/null || echo "0")
+        if [ -f trufflehog-results.json ]; then
+          SECRETS_COUNT=$(cat trufflehog-results.json | jq -s length)
           if [ "$SECRETS_COUNT" -gt 0 ]; then
             echo "❌ $SECRETS_COUNT secrets detected!"
             echo "Details uploaded to Security tab."
@@ -324,6 +232,7 @@ jobs:
         echo ""
         echo "🔒 IAC SECURITY RESULTS:"
         if [ -f trivy-iac-results.txt ] && [ -s trivy-iac-results.txt ]; then
+          echo "Issues found:"
           cat trivy-iac-results.txt
         else
           echo "✅ No IaC security issues found!"
@@ -351,14 +260,14 @@ jobs:
         
         # Check for secrets
         SECRETS_FOUND=0
-        if [ -f trufflehog-results.json ] && [ -s trufflehog-results.json ]; then
-          SECRETS_FOUND=$(jq length trufflehog-results.json 2>/dev/null || echo "0")
+        if [ -f trufflehog-results.json ]; then
+          SECRETS_FOUND=$(cat trufflehog-results.json | jq -s length)
         fi
         
         # Check for critical IaC issues
         CRITICAL_IAC=0
         if [ -f trivy-iac-results.txt ] && [ -s trivy-iac-results.txt ]; then
-          CRITICAL_IAC=$(grep -c "CRITICAL" trivy-iac-results.txt || true)
+          CRITICAL_IAC=$(grep -c "CRITICAL" trivy-iac-results.txt || echo "0")
         fi
         
         echo "Secrets found: $SECRETS_FOUND"
@@ -375,4 +284,4 @@ jobs:
         #   exit 1
         # fi
         
-        echo "✅ Security gate PASSED"
+        echo "✅ Security gate PASSED (warnings only)"
