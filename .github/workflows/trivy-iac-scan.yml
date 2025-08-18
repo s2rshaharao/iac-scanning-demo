@@ -33,8 +33,9 @@ jobs:
 
     - name: Run secrets scan
       run: |
-        trufflehog filesystem ${{ env.SCAN_TARGET }} --json > secrets-results.json || echo "[]" > secrets-results.json
-        trufflehog filesystem ${{ env.SCAN_TARGET }} --format=sarif > secrets-results.sarif || echo '{"version":"2.1.0","$schema":"https://schemastore.azurewebsites.net/schemas/json/sarif-2.1.0.json","runs":[{"tool":{"driver":{"name":"TruffleHog"}},"results":[]}]}' > secrets-results.sarif
+        # Run TruffleHog with proper format flags
+        trufflehog filesystem ${{ env.SCAN_TARGET }} --json --results=verified,unknown > secrets-results.json || echo "[]" > secrets-results.json
+        trufflehog filesystem ${{ env.SCAN_TARGET }} --format=sarif --results=verified,unknown > secrets-results.sarif || echo '{"version":"2.1.0","$schema":"https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json","runs":[{"tool":{"driver":{"name":"TruffleHog","version":"3.0"}},"results":[]}]}' > secrets-results.sarif
 
     - name: Upload secrets results to Security tab
       uses: github/codeql-action/upload-sarif@v3
@@ -99,7 +100,8 @@ jobs:
     - name: Create PR comment
       if: github.event_name == 'pull_request'
       run: |
-        SECRETS_COUNT=$(cat secrets-results.json | jq -r 'length // 0')
+        # Parse secrets count
+        SECRETS_COUNT=$(cat secrets-results.json | jq -r 'length // 0' 2>/dev/null || echo "0")
         
         # Extract IaC Report Summary table directly from Trivy output
         IAC_REPORT_SUMMARY=""
@@ -125,20 +127,32 @@ jobs:
           fi
         fi
         
+        # Generate secrets summary
+        SECRETS_DETAILS=""
+        if [ "$SECRETS_COUNT" -gt 0 ]; then
+          SECRETS_DETAILS="⚠️ **CRITICAL: Secrets detected!**\n\nFound in:"
+          # Show secret details from JSON
+          if command -v jq >/dev/null 2>&1; then
+            PARSED_SECRETS=$(cat secrets-results.json | jq -r '.[] | "- \(.DetectorName // "Unknown"): \(.SourceMetadata.Data.Filesystem.file // .SourceName // "unknown location")"' 2>/dev/null)
+            if [ -n "$PARSED_SECRETS" ]; then
+              SECRETS_DETAILS="$SECRETS_DETAILS\n$PARSED_SECRETS"
+            else
+              SECRETS_DETAILS="$SECRETS_DETAILS\n- Found $SECRETS_COUNT secrets"
+            fi
+          else
+            SECRETS_DETAILS="$SECRETS_DETAILS\n- Found $SECRETS_COUNT secrets"
+          fi
+        else
+          SECRETS_DETAILS="✅ No secrets detected"
+        fi
+        
         cat > pr_comment.md << EOF
         ## 🛡️ Security Scan Results
         
         ### 🔐 Secrets Detection
         **Secrets Found:** $SECRETS_COUNT
         
-        $(if [ "$SECRETS_COUNT" -gt 0 ]; then
-          echo "⚠️ **CRITICAL: Secrets detected!**"
-          echo ""
-          echo "Found in:"
-          cat secrets-results.json | jq -r '.[] | "- \(.SourceMetadata.Data.Filesystem.file):\(.SourceMetadata.Data.Filesystem.line)"'
-        else
-          echo "✅ No secrets detected"
-        fi)
+        $(echo -e "$SECRETS_DETAILS")
         
         ### 🔒 IaC Security Issues
         
