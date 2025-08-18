@@ -97,18 +97,17 @@ jobs:
       run: |
         SECRETS_COUNT=$(cat secrets-results.json | jq -r 'length // 0')
         
-        # Count IaC issues more accurately
+        # Count IaC issues (using original working method)
         IAC_CRITICAL=0
         IAC_HIGH=0
         IAC_MEDIUM=0
         IAC_LOW=0
         
         if [ -f iac-results.txt ] && [ -s iac-results.txt ]; then
-          # Count from the severity summary table at the top
-          IAC_CRITICAL=$(grep -A 10 "Severity.*Count" iac-results.txt | grep "Critical" | grep -o "[0-9]*" | head -1 || echo "0")
-          IAC_HIGH=$(grep -A 10 "Severity.*Count" iac-results.txt | grep "High" | grep -o "[0-9]*" | head -1 || echo "0")
-          IAC_MEDIUM=$(grep -A 10 "Severity.*Count" iac-results.txt | grep "Medium" | grep -o "[0-9]*" | head -1 || echo "0")
-          IAC_LOW=$(grep -A 10 "Severity.*Count" iac-results.txt | grep "Low" | grep -o "[0-9]*" | head -1 || echo "0")
+          IAC_CRITICAL=$(grep -c "CRITICAL" iac-results.txt || echo "0")
+          IAC_HIGH=$(grep -c "HIGH" iac-results.txt || echo "0")
+          IAC_MEDIUM=$(grep -c "MEDIUM" iac-results.txt || echo "0")
+          IAC_LOW=$(grep -c "LOW" iac-results.txt || echo "0")
         fi
         
         # Count dependency issues more accurately
