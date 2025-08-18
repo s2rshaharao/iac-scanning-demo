@@ -97,17 +97,11 @@ jobs:
       run: |
         SECRETS_COUNT=$(cat secrets-results.json | jq -r 'length // 0')
         
-        # Count IaC issues (using original working method)
-        IAC_CRITICAL=0
-        IAC_HIGH=0
-        IAC_MEDIUM=0
-        IAC_LOW=0
-        
+        # Extract IaC Report Summary table directly from Trivy output
+        IAC_REPORT_SUMMARY=""
         if [ -f iac-results.txt ] && [ -s iac-results.txt ]; then
-          IAC_CRITICAL=$(grep -c "CRITICAL" iac-results.txt || echo "0")
-          IAC_HIGH=$(grep -c "HIGH" iac-results.txt || echo "0")
-          IAC_MEDIUM=$(grep -c "MEDIUM" iac-results.txt || echo "0")
-          IAC_LOW=$(grep -c "LOW" iac-results.txt || echo "0")
+          # Extract the entire Report Summary table
+          IAC_REPORT_SUMMARY=$(awk '/Report Summary/,/Legend:/' iac-results.txt | head -n -1)
         fi
         
         # Count dependency issues more accurately
@@ -143,12 +137,10 @@ jobs:
         fi)
         
         ### 🔒 IaC Security Issues
-        | Severity | Count |
-        |----------|-------|
-        | Critical | $IAC_CRITICAL |
-        | High | $IAC_HIGH |
-        | Medium | $IAC_MEDIUM |
-        | Low | $IAC_LOW |
+        
+        \`\`\`
+        $IAC_REPORT_SUMMARY
+        \`\`\`
         
         ### 📦 Dependency Vulnerabilities
         | Severity | Count |
